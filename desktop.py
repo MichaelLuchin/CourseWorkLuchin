@@ -83,9 +83,9 @@ class CourseworkApp(QMainWindow):
             'L (макс. z, мкм)': '2.0',
             'λ (мкм)': '1.0',
             'n (пок. преломления)': '1.0',
-            'Амплитуда ψ': '12.0',
-            'Доля радиуса c (0-1)': '0.1',
-            'Число мод (N)': '30',
+            'Амплитуда ψ, r ∈ R': '12.0',
+            'Область задания ψ\n(доля радиуса (0-1))': '0.1',
+            'Число мод (N)': '50',
             'Z сечения (через запятую)': '0.2, 0.5, 1.0, 1.5, 2.0',
             'R сечения (через запятую)': '0.2, 1.0, 2.0, 3.0, 4.0',
             'Число точек на графике':'2000'
@@ -150,8 +150,8 @@ class CourseworkApp(QMainWindow):
             L = float(self.inputs['L (макс. z, мкм)'].text())
             lam = float(self.inputs['λ (мкм)'].text())
             n_ref = float(self.inputs['n (пок. преломления)'].text())
-            A = float(self.inputs['Амплитуда ψ'].text())
-            c_frac = float(self.inputs['Доля радиуса c (0-1)'].text())
+            A = float(self.inputs['Амплитуда ψ, r ∈ R'].text())
+            c_frac = float(self.inputs['Область задания ψ\n(доля радиуса (0-1))'].text())
             m_modes = int(self.inputs['Число мод (N)'].text())
             points_by_val = int(self.inputs['Число точек на графике'].text())
 
