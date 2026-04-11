@@ -5,7 +5,7 @@ from scipy.special import jv, jn_zeros
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QFormLayout, QLabel, QLineEdit,
                              QPushButton, QTabWidget, QMessageBox, QGroupBox,
-                             QProgressBar)
+                             QProgressBar, QTableWidget, QTableWidgetItem)  # Добавлены классы для таблицы
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -13,11 +13,11 @@ from matplotlib.figure import Figure
 
 class FourierBesselCalculator:
     """
-    Класс инкапсулирует физические параметры системы и логику [cite: 52]
-    вычисления распределения интенсивности света на основе ряда Фурье-Бесселя[cite: 46].
+    Класс инкапсулирует физические параметры системы и логику
+    вычисления распределения интенсивности света на основе ряда Фурье-Бесселя.
     """
 
-    def __init__(self, R, L, lam, n_ref, A, c_frac, m_modes):
+    def __init__(self, R, L, lam, n_ref, A, c_frac, members_count):
         self.R = R
         self.L = L
         self.lam = lam
@@ -25,14 +25,14 @@ class FourierBesselCalculator:
         self.A = A
         self.c_frac = c_frac
         self.c = c_frac * R
-        self.m_modes = m_modes
+        self.members_count = members_count
 
         # Предрасчет корней функции Бесселя для ускорения
-        self.mu_m = jn_zeros(0, self.m_modes)
+        self.mu_m = jn_zeros(0, self.members_count)
 
     def calculate_u(self, r, z):
         """
-        Вычисляет поле U(r, z) согласно итоговому ряду (22)
+        Вычисляет поле U(r, z) согласно итоговому ряду
         """
         if isinstance(r, np.ndarray):
             u_val = np.zeros_like(r, dtype=np.complex128)
@@ -41,7 +41,7 @@ class FourierBesselCalculator:
         else:
             u_val = 0.0 + 0.0j
 
-        for i in range(self.m_modes):
+        for i in range(self.members_count):
             mu = self.mu_m[i]
 
             # Коэффициент моды с учетом аналитического интеграла
@@ -60,7 +60,7 @@ class CourseworkApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Распределение интенсивности (Ряд Фурье-Бесселя)")
-        self.resize(1100, 750)
+        self.resize(1150, 800)
 
         # Основной виджет
         main_widget = QWidget()
@@ -69,7 +69,7 @@ class CourseworkApp(QMainWindow):
 
         # Левая панель (ввод параметров)
         left_panel = QWidget()
-        left_panel.setFixedWidth(300)
+        left_panel.setFixedWidth(330)
         left_layout = QVBoxLayout(left_panel)
 
         # Группа физических параметров
@@ -77,21 +77,33 @@ class CourseworkApp(QMainWindow):
         param_layout = QFormLayout()
 
         self.inputs = {}
-        # Дефолтные значения из вводных данных
+        # Дефолтные значения из вводных данных + данные для таблицы
         default_values = {
             'R (мкм)': '4.0',
             'L (макс. z, мкм)': '2.0',
             'λ (мкм)': '1.0',
             'n (пок. преломления)': '1.0',
             'Амплитуда ψ, r ∈ R': '12.0',
-            'Область задания ψ\n(доля радиуса (0-1))': '0.1',
-            'Число мод (N)': '50',
+            'Область задания ψ (доля радиуса)': '0.1',
+            'Кол-во членов ряда (N для графиков)': '50',
             'Z сечения (через запятую)': '0.2, 0.5, 1.0, 1.5, 2.0',
             'R сечения (через запятую)': '0.2, 1.0, 2.0, 3.0, 4.0',
-            'Число точек на графике':'2000'
+            'Число точек на графике': '2000',
+            '--- ОЦЕНКА ОСТАТКА ---': '---',
+            'Кол-во членов ряда 1 (N1)': '40',
+            'Кол-во членов ряда 2 (N2)': '50',
+            'Z для таблицы': '0.0, 1.0, 2.0',
+            'R для таблицы': '0.0, 0.4, 4.0'
         }
 
         for label_text, default_val in default_values.items():
+            if default_val == '---':
+                # Создаем визуальный разделитель
+                lbl = QLabel(label_text)
+                lbl.setStyleSheet("font-weight: bold; color: gray; margin-top: 10px;")
+                param_layout.addRow(lbl, QLabel(""))
+                continue
+
             line_edit = QLineEdit(default_val)
             self.inputs[label_text] = line_edit
             param_layout.addRow(QLabel(label_text), line_edit)
@@ -121,12 +133,12 @@ class CourseworkApp(QMainWindow):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Вкладки для графиков
+        # Вкладки
         self.setup_tabs()
         self.update_plots()
 
     def setup_tabs(self):
-        # Вкладка 1
+        # Вкладка 1: График от r
         self.tab1 = QWidget()
         self.tab1_layout = QVBoxLayout(self.tab1)
         self.fig1 = Figure()
@@ -135,7 +147,7 @@ class CourseworkApp(QMainWindow):
         self.tab1_layout.addWidget(self.canvas1)
         self.tabs.addTab(self.tab1, "График от r (z = const)")
 
-        # Вкладка 2
+        # Вкладка 2: График от z
         self.tab2 = QWidget()
         self.tab2_layout = QVBoxLayout(self.tab2)
         self.fig2 = Figure()
@@ -144,45 +156,76 @@ class CourseworkApp(QMainWindow):
         self.tab2_layout.addWidget(self.canvas2)
         self.tabs.addTab(self.tab2, "График от z (r = const)")
 
+        # Вкладка 3: Таблица оценки остатка
+        self.tab3 = QWidget()
+        self.tab3_layout = QVBoxLayout(self.tab3)
+        self.table_widget = QTableWidget()
+
+        # Настройка внешнего вида таблицы
+        self.table_widget.setAlternatingRowColors(True)
+        self.table_widget.setStyleSheet("""
+            QTableWidget { font-size: 14px; }
+            QHeaderView::section { font-weight: bold; background-color: #f0f0f0; }
+        """)
+        self.tab3_layout.addWidget(QLabel("Таблица модуля разности: | U(N1) - U(N2) |"))
+        self.tab3_layout.addWidget(self.table_widget)
+        self.tabs.addTab(self.tab3, "Оценка остатка")
+
     def update_plots(self):
         try:
+            # Считывание основных параметров
             R = float(self.inputs['R (мкм)'].text())
             L = float(self.inputs['L (макс. z, мкм)'].text())
             lam = float(self.inputs['λ (мкм)'].text())
             n_ref = float(self.inputs['n (пок. преломления)'].text())
             A = float(self.inputs['Амплитуда ψ, r ∈ R'].text())
-            c_frac = float(self.inputs['Область задания ψ\n(доля радиуса (0-1))'].text())
-            m_modes = int(self.inputs['Число мод (N)'].text())
+            c_frac = float(self.inputs['Область задания ψ (доля радиуса)'].text())
+            members_count_graph = int(self.inputs['Кол-во членов ряда (N для графиков)'].text())
             points_by_val = int(self.inputs['Число точек на графике'].text())
 
             z_fixed = [float(z.strip()) for z in self.inputs['Z сечения (через запятую)'].text().split(',')]
             r_fixed = [float(r.strip()) for r in self.inputs['R сечения (через запятую)'].text().split(',')]
 
+            # Считывание параметров для таблицы
+            n1 = int(self.inputs['Кол-во членов ряда 1 (N1)'].text())
+            n2 = int(self.inputs['Кол-во членов ряда 2 (N2)'].text())
+            z_table = [float(z.strip()) for z in self.inputs['Z для таблицы'].text().split(',')]
+            r_table = [float(r.strip()) for r in self.inputs['R для таблицы'].text().split(',')]
+
             # Настройка прогресс-бара
-            total_steps = len(z_fixed) + len(r_fixed)
+            total_steps = len(z_fixed) + len(r_fixed) + (len(z_table) * len(r_table))
             self.progress_bar.setMaximum(total_steps)
             self.progress_bar.setValue(0)
             current_step = 0
 
         except ValueError:
-            QMessageBox.critical(self, "Ошибка ввода", "Проверьте корректность параметров.")
+            QMessageBox.critical(self, "Ошибка ввода", "Проверьте корректность числовых параметров.")
             return
 
-        # Инициализация калькулятора с текущими параметрами
-        calculator = FourierBesselCalculator(R, L, lam, n_ref, A, c_frac, m_modes)
+        # Инициализация калькулятора для графиков
+        calculator_graph = FourierBesselCalculator(R, L, lam, n_ref, A, c_frac, members_count_graph)
+        # todo: почистить, или выбрать как основную оценку
+        calculator_graph2 = FourierBesselCalculator(R, L, lam, n_ref, A, c_frac, members_count_graph + 10) #для оценки остатка ряда
 
-        # График 1
-
+        # --- График 1 ---
         self.fig1.clear()
         ax1 = self.fig1.add_subplot(111)
         r_arr = np.linspace(0, R, points_by_val)
         for z in z_fixed:
             if 0 <= z <= L:
-                U_vals = calculator.calculate_u(r_arr, z)
+                U_vals = calculator_graph.calculate_u(r_arr, z)
                 ax1.plot(r_arr, np.abs(U_vals), label=f'z = {z:.2f}')
             current_step += 1
             self.progress_bar.setValue(current_step)
-            QApplication.processEvents()  # Обновляем UI во время цикла
+            QApplication.processEvents()
+
+        #todo: почистить, или выбрать как основную оценку
+        # для оценки остатка ряда
+        U_vals_1= calculator_graph.calculate_u(r_arr, 0.5)
+        U_vals_2= calculator_graph2.calculate_u(r_arr, 0.5)
+        Sn = U_vals_1-U_vals_2
+        print(f"{np.abs(np.mean(Sn)):.4e}")
+        # конец оценки остатка ряда
 
         ax1.set_xlabel('Радиус r, мкм')
         ax1.set_ylabel('|U(r,z)|')
@@ -193,13 +236,13 @@ class CourseworkApp(QMainWindow):
         self.fig1.tight_layout()
         self.canvas1.draw()
 
-        # График 2
+        # --- График 2 ---
         self.fig2.clear()
         ax2 = self.fig2.add_subplot(111)
         z_arr = np.linspace(0, L, points_by_val)
         for r in r_fixed:
             if 0 <= r <= R:
-                U_vals = calculator.calculate_u(r, z_arr)
+                U_vals = calculator_graph.calculate_u(r, z_arr)
                 ax2.plot(z_arr, np.abs(U_vals), label=f'r = {r:.2f}')
             current_step += 1
             self.progress_bar.setValue(current_step)
@@ -213,6 +256,40 @@ class CourseworkApp(QMainWindow):
         ax2.grid(True)
         self.fig2.tight_layout()
         self.canvas2.draw()
+
+        # --- Таблица Оценки Остатка ---
+        # Инициализация калькуляторов с разным числом мод
+        calc_1 = FourierBesselCalculator(R, L, lam, n_ref, A, c_frac, n1)
+        calc_2 = FourierBesselCalculator(R, L, lam, n_ref, A, c_frac, n2)
+
+        self.table_widget.setRowCount(len(r_table))
+        self.table_widget.setColumnCount(len(z_table))
+
+        # Подписываем оси таблицы
+        self.table_widget.setHorizontalHeaderLabels([f"z = {z}" for z in z_table])
+        self.table_widget.setVerticalHeaderLabels([f"r = {r}" for r in r_table])
+
+        # Заполнение ячеек
+        for i, r_val in enumerate(r_table):
+            for j, z_val in enumerate(z_table):
+                # Расчет в конкретной точке (r, z)
+                u1 = calc_1.calculate_u(r_val, z_val)
+                u2 = calc_2.calculate_u(r_val, z_val)
+
+                # Модуль разности комплексных чисел
+                diff = np.abs(u1 - u2)
+
+                # Форматируем в экспоненциальный вид (например, 1.23e-04)
+                item = QTableWidgetItem(f"{diff:.4e}")
+                item.setTextAlignment(sys.modules['PyQt5.QtCore'].Qt.AlignCenter)
+                self.table_widget.setItem(i, j, item)
+
+                current_step += 1
+                self.progress_bar.setValue(current_step)
+                QApplication.processEvents()
+
+        # Подгоняем размер столбцов под содержимое
+        self.table_widget.resizeColumnsToContents()
 
 
 if __name__ == '__main__':
