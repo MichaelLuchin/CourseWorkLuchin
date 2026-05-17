@@ -28,26 +28,22 @@ class FourierBesselCalculator:
         self.members_count = members_count
 
         # Предрасчет корней функции Бесселя для ускорения
-        self.mu_m = jn_zeros(0, self.members_count + 1)
+        self.mu_m = jn_zeros(0, self.members_count)
 
     def calculate_u(self, r, z):
         """
         Вычисляет поле U(r, z) согласно итоговому ряду
         """
-        if isinstance(r, np.ndarray):
-            u_val = np.zeros_like(r, dtype=np.complex128)
-        elif isinstance(z, np.ndarray):
-            u_val = np.zeros_like(z, dtype=np.complex128)
-        else:
-            u_val = 0.0 + 0.0j
+        # Безопасное создание результирующего массива под любую размерность r и z
+        u_val = np.zeros(np.broadcast(r, z).shape, dtype=np.complex128)
 
-        for i in range(1, self.members_count):
+        # Начинаем строго с 0-го индекса, чтобы захватить первый корень функции Бесселя
+        for i in range(0, self.members_count):
             mu = self.mu_m[i]
 
             # Коэффициент моды с учетом аналитического интеграла
-            amplitude = (2 * self.A * self.c) / (self.R * mu * jv(1, mu) ** 2) * jv(1, mu * self.c / self.R)
+            amplitude = (2 * self.A * (self.c / self.R)) / (mu * jv(1, mu) ** 2) * jv(1, mu * self.c / self.R)
 
-            # Фазовый множитель и радиальная часть
             phase = np.exp(1j * (mu ** 2 * self.lam) / (4 * np.pi * self.n_ref * self.R ** 2) * z)
             bessel_radial = jv(0, mu * r / self.R)
 
