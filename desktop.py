@@ -27,7 +27,6 @@ class FourierBesselCalculator:
         self.c = c_frac * R
         self.members_count = max(int(members_count), 1)
 
-        # Заранее вычисляем корни Бесселя J0(x) = 0
         self.mu_m = jn_zeros(0, self.members_count)
 
     def calculate_u_range(self, r, z, n_start, n_end):
@@ -342,7 +341,7 @@ class CourseworkApp(QMainWindow):
         try:
             N_str_list = [x.strip() for x in self.q_N_vals.text().split(',')]
             N_list = [int(x) for x in N_str_list]
-            N_list.sort()  # Гарантируем сортировку по возрастанию для оптимизации
+            N_list.sort()
         except ValueError:
             QMessageBox.critical(self, "Ошибка", "Неверный формат списка N. Вводите целые числа через запятую.")
             return
