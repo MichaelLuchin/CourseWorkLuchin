@@ -1,21 +1,21 @@
 import sys
+import csv
+import math
 import numpy as np
 from scipy.special import jv, jn_zeros
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QFormLayout, QLabel, QLineEdit,
                              QPushButton, QTabWidget, QMessageBox, QGroupBox,
-                             QProgressBar)
+                             QTableWidget, QTableWidgetItem, QFileDialog, QHeaderView)
+from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
 
 class FourierBesselCalculator:
-    """
-    Класс инкапсулирует физические параметры системы и логику
-    вычисления распределения интенсивности света на основе ряда Фурье-Бесселя.
-    """
+    """Класс для вычисления распределения интенсивности и оценок ряда Фурье-Бесселя."""
 
     def __init__(self, R, L, lam, n_ref, A, c_frac, members_count):
         self.R = R
@@ -25,25 +25,20 @@ class FourierBesselCalculator:
         self.A = A
         self.c_frac = c_frac
         self.c = c_frac * R
-        self.members_count = members_count
+        self.members_count = max(int(members_count), 1)
 
-        # Предрасчет корней функции Бесселя для ускорения
+        # Заранее вычисляем корни Бесселя J0(x) = 0
         self.mu_m = jn_zeros(0, self.members_count)
 
-    def calculate_u(self, r, z):
-        """
-        Вычисляет поле U(r, z) согласно итоговому ряду
-        """
-        # Безопасное создание результирующего массива под любую размерность r и z
+    def calculate_u_n_terms(self, r, z, n_terms):
+        """Вычисляет поле U(r, z) для заданного количества членов ряда (до n_terms)."""
         u_val = np.zeros(np.broadcast(r, z).shape, dtype=np.complex128)
+        limit = min(int(n_terms), self.members_count)
 
-        # Начинаем строго с 0-го индекса, чтобы захватить первый корень функции Бесселя
-        for i in range(0, self.members_count):
+        for i in range(limit):
             mu = self.mu_m[i]
-
-            # Коэффициент моды с учетом аналитического интеграла
-            amplitude = (2 * self.A * (self.c / self.R)) / (mu * jv(1, mu) ** 2) * jv(1, mu * self.c / self.R)
-
+            # Формула коэффициента
+            amplitude = (2 * self.A * self.c_frac) / (mu * jv(1, mu) ** 2) * jv(1, mu * self.c_frac)
             phase = np.exp(1j * (mu ** 2 * self.lam) / (4 * np.pi * self.n_ref * self.R ** 2) * z)
             bessel_radial = jv(0, mu * r / self.R)
 
@@ -51,236 +46,382 @@ class FourierBesselCalculator:
 
         return u_val
 
+    @staticmethod
+    def calculate_Mt_theoretical(epsilon, B):
+        """
+        Вычисляет теоретическое количество членов ряда M_t для заданной точности epsilon
+        и максимального количества членов ряда B согласно формуле (34).
+        """
+        if B < 0.25:
+            B = 0.25
+        # Вычисляем внутреннюю часть скобок
+        fraction = epsilon / (4.8 * np.sqrt(5))
+        sqrt_b = np.sqrt(B - 0.25)
+
+        # Возводим разность в квадрат и прибавляем 3/4
+        Mt = 0.75 + (fraction - sqrt_b) ** 2
+
+        return int(np.floor(Mt))
+
 
 class CourseworkApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Распределение интенсивности (Ряд Фурье-Бесселя)")
-        self.resize(1150, 800)
+        self.resize(1200, 800)
 
-        # Основной виджет
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QHBoxLayout(main_widget)
 
-        # Левая панель (ввод параметров)
+        # 1. Левая панель: Глобальные параметры системы
         left_panel = QWidget()
-        left_panel.setFixedWidth(340)
+        left_panel.setFixedWidth(300)
         left_layout = QVBoxLayout(left_panel)
 
-        # Группа физических параметров
-        param_group = QGroupBox("Параметры системы")
-        param_layout = QFormLayout()
+        param_group = QGroupBox("Глобальные параметры системы")
+        self.global_params = QFormLayout()
 
-        self.inputs = {}
-        # Дефолтные значения из вводных данных + данные для сходимости
-        default_values = {
-            'R (мкм)': '4.0',
-            'L (макс. z, мкм)': '2.0',
-            'λ (мкм)': '1.0',
-            'n (пок. преломления)': '1.0',
-            'Амплитуда ψ, r ∈ R': '12.0',
-            'Область задания ψ (доля радиуса)': '0.1',
-            'Кол-во членов ряда (N для графиков)': '50',
-            'Z сечения (через запятую)': '0.2, 0.5, 1.0, 1.5, 2.0',
-            'R сечения (через запятую)': '0.2, 1.0, 2.0, 3.0, 4.0',
-            'Число точек на графике': '2000',
-            '--- ИССЛЕДОВАНИЕ СХОДИМОСТИ ---': '---',
-            'Точки (r, z) через точку с запятой': '0.0, 1.0; 0.4, 2.0',
-            'Начальное кол-во членов (A)': '10',
-            'Конечное кол-во членов (B)': '100',
-            'Шаг по кол-ву членов': '5'
+        self.global_inputs = {
+            'R (мкм)': QLineEdit('4.0'),
+            'L (макс. z, мкм)': QLineEdit('2.0'),
+            'λ (мкм)': QLineEdit('1.0'),
+            'n (пок. преломления)': QLineEdit('1.0'),
+            'Амплитуда ψ, r ∈ R': QLineEdit('12.0'),
+            'Доля радиуса для ψ': QLineEdit('0.1')
         }
 
-        for label_text, default_val in default_values.items():
-            if default_val == '---':
-                # Создаем визуальный разделитель
-                lbl = QLabel(label_text)
-                lbl.setStyleSheet("font-weight: bold; color: gray; margin-top: 10px;")
-                param_layout.addRow(lbl, QLabel(""))
-                continue
+        for label, widget in self.global_inputs.items():
+            self.global_params.addRow(QLabel(label), widget)
 
-            line_edit = QLineEdit(default_val)
-            self.inputs[label_text] = line_edit
-            param_layout.addRow(QLabel(label_text), line_edit)
-
-        param_group.setLayout(param_layout)
+        param_group.setLayout(self.global_params)
         left_layout.addWidget(param_group)
-
-        # Кнопка расчета
-        self.calc_btn = QPushButton("Рассчитать")
-        self.calc_btn.setStyleSheet("font-weight: bold; padding: 10px;")
-        self.calc_btn.clicked.connect(self.update_plots)
-        left_layout.addWidget(self.calc_btn)
-
-        # ПРОГРЕСС-БАР
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_bar.setAlignment(sys.modules['PyQt5.QtCore'].Qt.AlignCenter)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar { border: 1px solid grey; border-radius: 5px; text-align: center; }
-            QProgressBar::chunk { background-color: #05B8CC; width: 20px; }
-        """)
-        left_layout.addWidget(self.progress_bar)
-
         left_layout.addStretch()
         main_layout.addWidget(left_panel)
 
+        # 2. Правая часть: Вкладки
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Вкладки
         self.setup_tabs()
-        self.update_plots()
+
+    def get_global_params(self):
+        """Читает общие параметры из левой панели."""
+        try:
+            return {
+                'R': float(self.global_inputs['R (мкм)'].text()),
+                'L': float(self.global_inputs['L (макс. z, мкм)'].text()),
+                'lam': float(self.global_inputs['λ (мкм)'].text()),
+                'n_ref': float(self.global_inputs['n (пок. преломления)'].text()),
+                'A_amp': float(self.global_inputs['Амплитуда ψ, r ∈ R'].text()),
+                'c_frac': float(self.global_inputs['Доля радиуса для ψ'].text())
+            }
+        except ValueError:
+            QMessageBox.critical(self, "Ошибка ввода", "Некорректные глобальные параметры.")
+            return None
 
     def setup_tabs(self):
-        # Вкладка 1: График от r
-        self.tab1 = QWidget()
-        self.tab1_layout = QVBoxLayout(self.tab1)
-        self.fig1 = Figure()
-        self.canvas1 = FigureCanvas(self.fig1)
-        self.tab1_layout.addWidget(NavigationToolbar(self.canvas1, self))
-        self.tab1_layout.addWidget(self.canvas1)
-        self.tabs.addTab(self.tab1, "График от r (z = const)")
+        # --- Вкладка 1: График от r ---
+        self.tab_r = QWidget()
+        layout_r = QHBoxLayout(self.tab_r)
+        controls_r = QWidget()
+        controls_r.setFixedWidth(250)
+        form_r = QFormLayout(controls_r)
 
-        # Вкладка 2: График от z
-        self.tab2 = QWidget()
-        self.tab2_layout = QVBoxLayout(self.tab2)
-        self.fig2 = Figure()
-        self.canvas2 = FigureCanvas(self.fig2)
-        self.tab2_layout.addWidget(NavigationToolbar(self.canvas2, self))
-        self.tab2_layout.addWidget(self.canvas2)
-        self.tabs.addTab(self.tab2, "График от z (r = const)")
+        self.r_z_vals = QLineEdit('0.2, 0.5, 1.0, 1.5, 2.0')
+        self.r_N = QLineEdit('50')
+        self.r_pts = QLineEdit('1000')
+        btn_r = QPushButton("Построить график")
+        btn_r.clicked.connect(self.plot_r)
 
-        # Вкладка 3: График сходимости
-        self.tab3 = QWidget()
-        self.tab3_layout = QVBoxLayout(self.tab3)
-        self.fig3 = Figure()
-        self.canvas3 = FigureCanvas(self.fig3)
-        self.tab3_layout.addWidget(NavigationToolbar(self.canvas3, self))
-        self.tab3_layout.addWidget(self.canvas3)
-        self.tabs.addTab(self.tab3, "Сходимость ряда")
+        form_r.addRow(QLabel("Z сечения:"), self.r_z_vals)
+        form_r.addRow(QLabel("N членов:"), self.r_N)
+        form_r.addRow(QLabel("Точек:"), self.r_pts)
+        form_r.addRow(btn_r)
 
-    def update_plots(self):
+        self.fig_r = Figure()
+        self.canvas_r = FigureCanvas(self.fig_r)
+
+        plot_layout_r = QVBoxLayout()
+        plot_layout_r.addWidget(NavigationToolbar(self.canvas_r, self))
+        plot_layout_r.addWidget(self.canvas_r)
+
+        layout_r.addWidget(controls_r)
+        layout_r.addLayout(plot_layout_r)
+        self.tabs.addTab(self.tab_r, "Распределение от r")
+
+        # --- Вкладка 2: График от z ---
+        self.tab_z = QWidget()
+        layout_z = QHBoxLayout(self.tab_z)
+        controls_z = QWidget()
+        controls_z.setFixedWidth(250)
+        form_z = QFormLayout(controls_z)
+
+        self.z_r_vals = QLineEdit('0.0, 1.0, 2.0, 3.0, 4.0')
+        self.z_N = QLineEdit('50')
+        self.z_pts = QLineEdit('1000')
+        btn_z = QPushButton("Построить график")
+        btn_z.clicked.connect(self.plot_z)
+
+        form_z.addRow(QLabel("R сечения:"), self.z_r_vals)
+        form_z.addRow(QLabel("N членов:"), self.z_N)
+        form_z.addRow(QLabel("Точек:"), self.z_pts)
+        form_z.addRow(btn_z)
+
+        self.fig_z = Figure()
+        self.canvas_z = FigureCanvas(self.fig_z)
+
+        plot_layout_z = QVBoxLayout()
+        plot_layout_z.addWidget(NavigationToolbar(self.canvas_z, self))
+        plot_layout_z.addWidget(self.canvas_z)
+
+        layout_z.addWidget(controls_z)
+        layout_z.addLayout(plot_layout_z)
+        self.tabs.addTab(self.tab_z, "Распределение от z")
+
+        # --- Вкладка 3: Качество оценки (Таблица) ---
+        self.tab_quality = QWidget()
+        layout_q = QVBoxLayout(self.tab_quality)
+
+        controls_q = QHBoxLayout()
+        self.q_pt = QLineEdit('4.0, 2.0')
+        self.q_B = QLineEdit('1000')
+        self.q_eps = QLineEdit('1e-02, 1e-03, 1e-04, 1e-05, 1e-06, 1e-07, 1e-08, 1e-09, 1e-10')
+        self.q_step_Me = QLineEdit('1')  # <-- Новое поле для шага количества членов ряда для Me
+
+        btn_q_calc = QPushButton("Рассчитать таблицу")
+        btn_q_calc.clicked.connect(self.calc_quality)
+        btn_q_save = QPushButton("Экспорт в CSV")
+        btn_q_save.clicked.connect(self.save_csv)
+
+        controls_q.addWidget(QLabel("Точка (r, z):"))
+        controls_q.addWidget(self.q_pt)
+        controls_q.addWidget(QLabel("Предельное B:"))
+        controls_q.addWidget(self.q_B)
+        controls_q.addWidget(QLabel("Список ε:"))
+        controls_q.addWidget(self.q_eps)
+        controls_q.addWidget(QLabel("Шаг поиска Me:"))
+        controls_q.addWidget(self.q_step_Me)
+        controls_q.addWidget(btn_q_calc)
+        controls_q.addWidget(btn_q_save)
+
+        self.table_q = QTableWidget()
+        self.table_q.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        layout_q.addLayout(controls_q)
+        layout_q.addWidget(self.table_q)
+        self.tabs.addTab(self.tab_quality, "Качество оценки остатка")
+
+        # --- Вкладка 4: Сходимость ряда (График от N) ---
+        self.tab_conv = QWidget()
+        layout_c = QHBoxLayout(self.tab_conv)
+        controls_c = QWidget()
+        controls_c.setFixedWidth(250)
+        form_c = QFormLayout(controls_c)
+
+        self.c_points = QLineEdit('(0.0, 0.0), (2.0, 1.0), (4.0, 2.0)')
+        self.c_start_N = QLineEdit('1')
+        self.c_max_N = QLineEdit('150')
+        self.c_step_N = QLineEdit('2')
+        btn_conv = QPushButton("Построить сходимость")
+        btn_conv.clicked.connect(self.plot_convergence)
+
+        form_c.addRow(QLabel("Точки (r, z):"), self.c_points)
+        form_c.addRow(QLabel("Стартовое N членов:"), self.c_start_N)
+        form_c.addRow(QLabel("Макс. N членов:"), self.c_max_N)
+        form_c.addRow(QLabel("Шаг по N:"), self.c_step_N)
+        form_c.addRow(btn_conv)
+
+        self.fig_conv = Figure()
+        self.canvas_conv = FigureCanvas(self.fig_conv)
+
+        plot_layout_c = QVBoxLayout()
+        plot_layout_c.addWidget(NavigationToolbar(self.canvas_conv, self))
+        plot_layout_c.addWidget(self.canvas_conv)
+
+        layout_c.addWidget(controls_c)
+        layout_c.addLayout(plot_layout_c)
+        self.tabs.addTab(self.tab_conv, "Сходимость ряда")
+
+    # --- Обработчики графиков ---
+    def plot_r(self):
+        p = self.get_global_params()
+        if not p: return
         try:
-            # Считывание основных параметров
-            R = float(self.inputs['R (мкм)'].text())
-            L = float(self.inputs['L (макс. z, мкм)'].text())
-            lam = float(self.inputs['λ (мкм)'].text())
-            n_ref = float(self.inputs['n (пок. преломления)'].text())
-            A_amp = float(self.inputs['Амплитуда ψ, r ∈ R'].text())
-            c_frac = float(self.inputs['Область задания ψ (доля радиуса)'].text())
-            members_count_graph = int(self.inputs['Кол-во членов ряда (N для графиков)'].text())
-            points_by_val = int(self.inputs['Число точек на графике'].text())
-
-            z_fixed = [float(z.strip()) for z in self.inputs['Z сечения (через запятую)'].text().split(',')]
-            r_fixed = [float(r.strip()) for r in self.inputs['R сечения (через запятую)'].text().split(',')]
-
-            # Считывание параметров для 3-го графика (сходимости)
-            points_str = self.inputs['Точки (r, z) через точку с запятой'].text()
-            conv_points = []
-            for pt in points_str.split(';'):
-                if pt.strip():
-                    r_str, z_str = pt.split(',')
-                    conv_points.append((float(r_str.strip()), float(z_str.strip())))
-
-            A_terms = int(self.inputs['Начальное кол-во членов (A)'].text())
-            B_terms = int(self.inputs['Конечное кол-во членов (B)'].text())
-            step_terms = int(self.inputs['Шаг по кол-ву членов'].text())
-
-            # Массив значений N для исследования
-            N_vals = list(range(A_terms, B_terms + 1, step_terms))
-
-            # Настройка прогресс-бара
-            total_steps = len(z_fixed) + len(r_fixed) + (len(conv_points) * len(N_vals))
-            self.progress_bar.setMaximum(total_steps)
-            self.progress_bar.setValue(0)
-            current_step = 0
-
+            Z_vals = [float(x.strip()) for x in self.r_z_vals.text().split(',')]
+            N = int(self.r_N.text())
+            pts = int(self.r_pts.text())
         except ValueError:
-            QMessageBox.critical(self, "Ошибка ввода", "Проверьте корректность числовых параметров.")
+            QMessageBox.critical(self, "Ошибка", "Проверьте локальные параметры графика R.")
             return
 
-        # Инициализация калькулятора для основных графиков
-        calculator_graph = FourierBesselCalculator(R, L, lam, n_ref, A_amp, c_frac, members_count_graph)
+        calc = FourierBesselCalculator(p['R'], p['L'], p['lam'], p['n_ref'], p['A_amp'], p['c_frac'], N)
+        self.fig_r.clear()
+        ax = self.fig_r.add_subplot(111)
+        r_arr = np.linspace(0, p['R'], pts)
 
-        # --- График 1 ---
-        self.fig1.clear()
-        ax1 = self.fig1.add_subplot(111)
-        r_arr = np.linspace(0, R, points_by_val)
-        for z in z_fixed:
-            if 0 <= z <= L:
-                U_vals = calculator_graph.calculate_u(r_arr, z)
-                ax1.plot(r_arr, np.abs(U_vals), label=f'z = {z:.2f}')
-            current_step += 1
-            self.progress_bar.setValue(current_step)
-            QApplication.processEvents()
+        for z in Z_vals:
+            U = calc.calculate_u_n_terms(r_arr, z, N)
+            ax.plot(r_arr, np.abs(U), label=f'z = {z:.2f}')
 
-        ax1.set_xlabel('Радиус r, мкм')
-        ax1.set_ylabel('|U(r,z)|')
-        ax1.set_title('Распределение вдоль r')
-        ax1.set_xlim(0, R)
-        ax1.legend()
-        ax1.grid(True)
-        self.fig1.tight_layout()
-        self.canvas1.draw()
+        ax.set_title('Распределение вдоль r')
+        ax.set_xlabel('Радиус r, мкм')
+        ax.set_ylabel('|U(r,z)|')
+        ax.grid(True)
+        ax.legend()
+        self.fig_r.tight_layout()
+        self.canvas_r.draw()
 
-        # --- График 2 ---
-        self.fig2.clear()
-        ax2 = self.fig2.add_subplot(111)
-        z_arr = np.linspace(0, L, points_by_val)
-        for r in r_fixed:
-            if 0 <= r <= R:
-                U_vals = calculator_graph.calculate_u(r, z_arr)
-                ax2.plot(z_arr, np.abs(U_vals), label=f'r = {r:.2f}')
-            current_step += 1
-            self.progress_bar.setValue(current_step)
-            QApplication.processEvents()
+    def plot_z(self):
+        p = self.get_global_params()
+        if not p: return
+        try:
+            R_vals = [float(x.strip()) for x in self.z_r_vals.text().split(',')]
+            N = int(self.z_N.text())
+            pts = int(self.z_pts.text())
+        except ValueError:
+            QMessageBox.critical(self, "Ошибка", "Проверьте локальные параметры графика Z.")
+            return
 
-        ax2.set_xlabel('Продольная координата z, мкм')
-        ax2.set_ylabel('|U(r,z)|')
-        ax2.set_title('Распределение вдоль z')
-        ax2.set_xlim(0, L)
-        ax2.legend()
-        ax2.grid(True)
-        self.fig2.tight_layout()
-        self.canvas2.draw()
+        calc = FourierBesselCalculator(p['R'], p['L'], p['lam'], p['n_ref'], p['A_amp'], p['c_frac'], N)
+        self.fig_z.clear()
+        ax = self.fig_z.add_subplot(111)
+        z_arr = np.linspace(0, p['L'], pts)
 
-        # --- График 3: Сходимость ---
-        self.fig3.clear()
-        ax3 = self.fig3.add_subplot(111)
+        for r in R_vals:
+            U = calc.calculate_u_n_terms(r, z_arr, N)
+            ax.plot(z_arr, np.abs(U), label=f'r = {r:.2f}')
 
-        print("\n--- Данные для графика сходимости ---")
-        for r_val, z_val in conv_points:
-            u_results = []
-            print(f"\nТочка: r = {r_val}, z = {z_val}")
+        ax.set_title('Распределение вдоль z')
+        ax.set_xlabel('Продольная координата z, мкм')
+        ax.set_ylabel('|U(r,z)|')
+        ax.grid(True)
+        ax.legend()
+        self.fig_z.tight_layout()
+        self.canvas_z.draw()
 
-            for n_terms in N_vals:
-                # Инициализируем новый экземпляр для каждого шага N
-                calc = FourierBesselCalculator(R, L, lam, n_ref, A_amp, c_frac, n_terms)
-                u_val = calc.calculate_u(r_val, z_val)
+    def plot_convergence(self):
+        p = self.get_global_params()
+        if not p: return
+        try:
+            raw_pts = eval(f"[{self.c_points.text()}]")
+            points = [(float(pt[0]), float(pt[1])) for pt in raw_pts]
+            start_N = max(int(self.c_start_N.text()), 1)
+            max_N = int(self.c_max_N.text())
+            step_N = max(int(self.c_step_N.text()), 1)
+        except Exception:
+            QMessageBox.critical(self, "Ошибка", "Проверьте формат точек (r, z) или параметры N.")
+            return
 
-                # Считаем модуль амплитуды
-                abs_u = np.abs(u_val)
-                u_results.append(abs_u)
+        if start_N > max_N:
+            QMessageBox.warning(self, "Предупреждение", "Стартовое N не может быть больше максимального N.")
+            return
 
-                # Выводим текущую точку в консоль
-                print(f"  N = {n_terms:3d}  |  |U| = {abs_u:.8f}")
+        N_vals = np.arange(start_N, max_N + 1, step_N)
+        calc = FourierBesselCalculator(p['R'], p['L'], p['lam'], p['n_ref'], p['A_amp'], p['c_frac'], max_N + 10)
 
-                current_step += 1
-                self.progress_bar.setValue(current_step)
-                QApplication.processEvents()
+        self.fig_conv.clear()
+        ax = self.fig_conv.add_subplot(111)
 
-            # Строим кривую для конкретной точки с маркерами, чтобы было видно шаги
-            ax3.plot(N_vals, u_results, marker='.', label=f'r = {r_val}, z = {z_val}')
+        for r_val, z_val in points:
+            u_amplitudes = []
+            for n in N_vals:
+                U = calc.calculate_u_n_terms(r_val, z_val, n)
+                u_amplitudes.append(np.abs(U))
 
-        ax3.set_xlabel('Количество членов ряда')
-        ax3.set_ylabel('|U(r,z)|')
-        ax3.set_title('Оценка сходимости остатка ряда')
-        ax3.legend()
-        ax3.grid(True)
-        self.fig3.tight_layout()
-        self.canvas3.draw()
+            ax.plot(N_vals, u_amplitudes, marker='.', linestyle='-', label=f'r={r_val}, z={z_val}')
+
+        ax.set_title('Сходимость амплитуды ряда от числа членов N')
+        ax.set_xlabel('Количество членов ряда N')
+        ax.set_ylabel('|U(r,z)|')
+        ax.grid(True)
+        ax.legend()
+        self.fig_conv.tight_layout()
+        self.canvas_conv.draw()
+
+    # --- Обработчик вкладки Качество оценки ---
+    def calc_quality(self):
+        p = self.get_global_params()
+        if not p: return
+        try:
+            r_val, z_val = [float(x.strip()) for x in self.q_pt.text().split(',')]
+            B = int(self.q_B.text())
+            eps_str_list = [x.strip() for x in self.q_eps.text().split(',')]
+            eps_list = [float(x) for x in eps_str_list]
+            step_Me = max(int(self.q_step_Me.text()), 1)  # Читаем заданный пользователем шаг для Me
+        except ValueError:
+            QMessageBox.critical(self, "Ошибка", "Неверный формат параметров таблицы.")
+            return
+
+        # Находим максимальный теоретический предел
+        max_theoretical_mt = 100
+        for eps in eps_list:
+            max_theoretical_mt = max(max_theoretical_mt, FourierBesselCalculator.calculate_Mt_theoretical(eps, B))
+
+        calc = FourierBesselCalculator(p['R'], p['L'], p['lam'], p['n_ref'], p['A_amp'], p['c_frac'],
+                                       max_theoretical_mt + 100)
+
+        self.table_q.setColumnCount(len(eps_list))
+        self.table_q.setRowCount(4)
+        self.table_q.setHorizontalHeaderLabels(eps_str_list)
+        self.table_q.setVerticalHeaderLabels(['Mt', 'Me', 'Mt - Me', '|S_Mt - S_Me|'])
+        self.table_q.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        for col, eps in enumerate(eps_list):
+            # 1. Теоретический Mt по формуле
+            Mt = FourierBesselCalculator.calculate_Mt_theoretical(eps, B)
+
+            # 2. Поиск Me (спускаемся вниз от Mt с заданным шагом step_Me)
+            S_Mt_val = calc.calculate_u_n_terms(r_val, z_val, Mt)
+            Me = Mt
+
+            # Меняем шаг в диапазоне range на отрицательный step_Me
+            for m in range(Mt - step_Me, 0, -step_Me):
+                S_m = calc.calculate_u_n_terms(r_val, z_val, m)
+                diff = abs(np.abs(S_Mt_val) - np.abs(S_m))
+
+                print("m: ", m)
+                print("eps: ", eps)
+
+                if diff < eps:
+                    Me = m
+                else:
+                    break
+
+            # Разница и фактическая невязка
+            S_Me_val = calc.calculate_u_n_terms(r_val, z_val, Me)
+            actual_diff = abs(np.abs(S_Mt_val) - np.abs(S_Me_val))
+
+            self.table_q.setItem(0, col, QTableWidgetItem(str(Mt)))
+            self.table_q.setItem(1, col, QTableWidgetItem(str(Me)))
+            self.table_q.setItem(2, col, QTableWidgetItem(str(Mt - Me)))
+            self.table_q.setItem(3, col, QTableWidgetItem(f"{actual_diff:.6e}"))
+
+    def save_csv(self):
+        if self.table_q.rowCount() == 0:
+            QMessageBox.warning(self, "Пусто", "Сначала рассчитайте таблицу.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить CSV", "quality_evaluation.csv", "CSV Files (*.csv)")
+        if not path: return
+
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f, delimiter=';')
+                headers = ["Параметр"] + [self.table_q.horizontalHeaderItem(i).text() for i in
+                                          range(self.table_q.columnCount())]
+                writer.writerow(headers)
+
+                for row in range(self.table_q.rowCount()):
+                    row_data = [self.table_q.verticalHeaderItem(row).text()]
+                    for col in range(self.table_q.columnCount()):
+                        item = self.table_q.item(row, col)
+                        row_data.append(item.text() if item else "")
+                    writer.writerow(row_data)
+
+            QMessageBox.information(self, "Успех", f"Данные сохранены в файл:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{str(e)}")
 
 
 if __name__ == '__main__':
