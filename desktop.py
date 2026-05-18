@@ -30,14 +30,20 @@ class FourierBesselCalculator:
         # Заранее вычисляем корни Бесселя J0(x) = 0
         self.mu_m = jn_zeros(0, self.members_count)
 
-    def calculate_u_n_terms(self, r, z, n_terms):
-        """Вычисляет поле U(r, z) для заданного количества членов ряда (до n_terms)."""
+    def calculate_u_range(self, r, z, n_start, n_end):
+        """
+        Вычисляет сумму членов ряда в интервале от n_start до n_end включительно.
+        Использует 1-базовую индексацию членов ряда для удобства.
+        """
         u_val = np.zeros(np.broadcast(r, z).shape, dtype=np.complex128)
-        limit = min(int(n_terms), self.members_count)
+        start_idx = max(int(n_start) - 1, 0)
+        end_idx = min(int(n_end), self.members_count)
 
-        for i in range(limit):
+        if start_idx >= end_idx:
+            return u_val
+
+        for i in range(start_idx, end_idx):
             mu = self.mu_m[i]
-            # Формула коэффициента
             amplitude = (2 * self.A * self.c_frac) / (mu * jv(1, mu) ** 2) * jv(1, mu * self.c_frac)
             phase = np.exp(1j * (mu ** 2 * self.lam) / (4 * np.pi * self.n_ref * self.R ** 2) * z)
             bessel_radial = jv(0, mu * r / self.R)
@@ -45,6 +51,10 @@ class FourierBesselCalculator:
             u_val += amplitude * phase * bessel_radial
 
         return u_val
+
+    def calculate_u_n_terms(self, r, z, n_terms):
+        """Вычисляет поле U(r, z) для заданного количества членов ряда (от 1 до n_terms)."""
+        return self.calculate_u_range(r, z, 1, n_terms)
 
     @staticmethod
     def calculate_Mt_theoretical(epsilon, B):
@@ -54,11 +64,9 @@ class FourierBesselCalculator:
         """
         if B < 0.25:
             B = 0.25
-        # Вычисляем внутреннюю часть скобок
         fraction = epsilon / (4.8 * np.sqrt(5))
         sqrt_b = np.sqrt(B - 0.25)
 
-        # Возводим разность в квадрат и прибавляем 3/4
         Mt = 0.75 + (fraction - sqrt_b) ** 2
 
         return int(np.floor(Mt))
@@ -187,7 +195,7 @@ class CourseworkApp(QMainWindow):
         self.q_pt = QLineEdit('4.0, 2.0')
         self.q_B = QLineEdit('1000')
         self.q_eps = QLineEdit('1e-02, 1e-03, 1e-04, 1e-05, 1e-06, 1e-07, 1e-08, 1e-09, 1e-10')
-        self.q_step_Me = QLineEdit('1')  # <-- Новое поле для шага количества членов ряда для Me
+        self.q_step_Me = QLineEdit('1')
 
         btn_q_calc = QPushButton("Рассчитать таблицу")
         btn_q_calc.clicked.connect(self.calc_quality)
@@ -325,9 +333,15 @@ class CourseworkApp(QMainWindow):
 
         for r_val, z_val in points:
             u_amplitudes = []
-            for n in N_vals:
-                U = calc.calculate_u_n_terms(r_val, z_val, n)
-                u_amplitudes.append(np.abs(U))
+
+            current_u = calc.calculate_u_range(r_val, z_val, 1, N_vals[0])
+            u_amplitudes.append(np.abs(current_u))
+
+            prev_n = N_vals[0]
+            for n in N_vals[1:]:
+                current_u += calc.calculate_u_range(r_val, z_val, prev_n + 1, n)
+                u_amplitudes.append(np.abs(current_u))
+                prev_n = n
 
             ax.plot(N_vals, u_amplitudes, marker='.', linestyle='-', label=f'r={r_val}, z={z_val}')
 
@@ -348,12 +362,11 @@ class CourseworkApp(QMainWindow):
             B = int(self.q_B.text())
             eps_str_list = [x.strip() for x in self.q_eps.text().split(',')]
             eps_list = [float(x) for x in eps_str_list]
-            step_Me = max(int(self.q_step_Me.text()), 1)  # Читаем заданный пользователем шаг для Me
+            step_Me = max(int(self.q_step_Me.text()), 1)
         except ValueError:
             QMessageBox.critical(self, "Ошибка", "Неверный формат параметров таблицы.")
             return
 
-        # Находим максимальный теоретический предел
         max_theoretical_mt = 100
         for eps in eps_list:
             max_theoretical_mt = max(max_theoretical_mt, FourierBesselCalculator.calculate_Mt_theoretical(eps, B))
@@ -368,17 +381,13 @@ class CourseworkApp(QMainWindow):
         self.table_q.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         for col, eps in enumerate(eps_list):
-            # 1. Теоретический Mt по формуле
             Mt = FourierBesselCalculator.calculate_Mt_theoretical(eps, B)
 
-            # 2. Поиск Me (спускаемся вниз от Mt с заданным шагом step_Me)
-            S_Mt_val = calc.calculate_u_n_terms(r_val, z_val, Mt)
+            # Разность полей |S_Mt - S_m| — это модуль суммы членов от m + 1 до Mt.
             Me = Mt
-
-            # Меняем шаг в диапазоне range на отрицательный step_Me
             for m in range(Mt - step_Me, 0, -step_Me):
-                S_m = calc.calculate_u_n_terms(r_val, z_val, m)
-                diff = abs(np.abs(S_Mt_val) - np.abs(S_m))
+                S_diff = calc.calculate_u_range(r_val, z_val, m + 1, Mt)
+                diff = np.abs(S_diff)
 
                 print("m: ", m)
                 print("eps: ", eps)
@@ -388,9 +397,10 @@ class CourseworkApp(QMainWindow):
                 else:
                     break
 
-            # Разница и фактическая невязка
-            S_Me_val = calc.calculate_u_n_terms(r_val, z_val, Me)
-            actual_diff = abs(np.abs(S_Mt_val) - np.abs(S_Me_val))
+            if Me == Mt:
+                actual_diff = 0.0
+            else:
+                actual_diff = np.abs(calc.calculate_u_range(r_val, z_val, Me + 1, Mt))
 
             self.table_q.setItem(0, col, QTableWidgetItem(str(Mt)))
             self.table_q.setItem(1, col, QTableWidgetItem(str(Me)))
