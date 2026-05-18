@@ -59,7 +59,7 @@ class FourierBesselCalculator:
 class CourseworkApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Распределение интенсивности (Ряд Фурье-Бесселя)")
+        self.setWindowTitle("Курсовая работа, вариант 12")
         self.resize(1200, 800)
 
         main_widget = QWidget()
@@ -212,7 +212,7 @@ class CourseworkApp(QMainWindow):
         self.c_start_N = QLineEdit('1')
         self.c_max_N = QLineEdit('150')
         self.c_step_N = QLineEdit('2')
-        btn_conv = QPushButton("Построить сходимость")
+        btn_conv = QPushButton("Построить график")
         btn_conv.clicked.connect(self.plot_convergence)
 
         form_c.addRow(QLabel("Точки (r, z):"), self.c_points)
@@ -326,7 +326,7 @@ class CourseworkApp(QMainWindow):
 
             ax.plot(N_vals, u_amplitudes, marker='.', linestyle='-', label=f'r={r_val}, z={z_val}')
 
-        ax.set_title('Сходимость амплитуды ряда от числа членов N')
+        ax.set_title('Зависимость модуля частичной суммы ряда от числа членов N')
         ax.set_xlabel('Количество членов ряда N')
         ax.set_ylabel('|U(r,z)|')
         ax.grid(True)
