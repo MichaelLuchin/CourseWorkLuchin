@@ -1,3 +1,4 @@
 .idea
 .venv
 /quality_evaluation.csv
+/error_evaluation.csv

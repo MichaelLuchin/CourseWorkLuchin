@@ -56,21 +56,6 @@ class FourierBesselCalculator:
         """Вычисляет поле U(r, z) для заданного количества членов ряда (от 1 до n_terms)."""
         return self.calculate_u_range(r, z, 1, n_terms)
 
-    @staticmethod
-    def calculate_Mt_theoretical(epsilon, B):
-        """
-        Вычисляет теоретическое количество членов ряда M_t для заданной точности epsilon
-        и максимального количества членов ряда B согласно формуле (34).
-        """
-        if B < 0.25:
-            B = 0.25
-        fraction = epsilon / (4.8 * np.sqrt(5))
-        sqrt_b = np.sqrt(B - 0.25)
-
-        Mt = 0.75 + (fraction - sqrt_b) ** 2
-
-        return int(np.floor(Mt))
-
 
 class CourseworkApp(QMainWindow):
     def __init__(self):
@@ -187,38 +172,35 @@ class CourseworkApp(QMainWindow):
         layout_z.addLayout(plot_layout_z)
         self.tabs.addTab(self.tab_z, "Распределение от z")
 
-        # --- Вкладка 3: Качество оценки (Таблица) ---
+        # --- Вкладка 3: Исследование погрешности (Две таблицы) ---
         self.tab_quality = QWidget()
         layout_q = QVBoxLayout(self.tab_quality)
 
         controls_q = QHBoxLayout()
-        self.q_pt = QLineEdit('4.0, 2.0')
-        self.q_B = QLineEdit('1000')
-        self.q_eps = QLineEdit('1e-02, 1e-03, 1e-04, 1e-05, 1e-06, 1e-07, 1e-08, 1e-09, 1e-10')
-        self.q_step_Me = QLineEdit('1')
+        self.q_N_vals = QLineEdit('100, 500, 1000, 5000, 10000, 50000, 100000, 500000')
 
-        btn_q_calc = QPushButton("Рассчитать таблицу")
-        btn_q_calc.clicked.connect(self.calc_quality)
+        btn_q_calc = QPushButton("Рассчитать таблицы")
+        btn_q_calc.clicked.connect(self.calc_error_tables)
         btn_q_save = QPushButton("Экспорт в CSV")
-        btn_q_save.clicked.connect(self.save_csv)
+        btn_q_save.clicked.connect(self.save_error_csv)
 
-        controls_q.addWidget(QLabel("Точка (r, z):"))
-        controls_q.addWidget(self.q_pt)
-        controls_q.addWidget(QLabel("Предельное B:"))
-        controls_q.addWidget(self.q_B)
-        controls_q.addWidget(QLabel("Список ε:"))
-        controls_q.addWidget(self.q_eps)
-        controls_q.addWidget(QLabel("Шаг поиска Me:"))
-        controls_q.addWidget(self.q_step_Me)
+        controls_q.addWidget(QLabel("Частичные суммы N (через запятую):"))
+        controls_q.addWidget(self.q_N_vals)
         controls_q.addWidget(btn_q_calc)
         controls_q.addWidget(btn_q_save)
 
-        self.table_q = QTableWidget()
-        self.table_q.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_q1 = QTableWidget()
+        self.table_q1.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_q2 = QTableWidget()
+        self.table_q2.setEditTriggers(QTableWidget.NoEditTriggers)
 
         layout_q.addLayout(controls_q)
-        layout_q.addWidget(self.table_q)
-        self.tabs.addTab(self.tab_quality, "Качество оценки остатка")
+        layout_q.addWidget(QLabel("Таблица 1: Точка r = 0, z = 0 (Истинное значение = заданная амплитуда ψ)"))
+        layout_q.addWidget(self.table_q1)
+        layout_q.addWidget(QLabel("Таблица 2: Точка r = 0.5R, z = 0 (Истинное значение = 0.0)"))
+        layout_q.addWidget(self.table_q2)
+
+        self.tabs.addTab(self.tab_quality, "Исследование погрешности")
 
         # --- Вкладка 4: Сходимость ряда (График от N) ---
         self.tab_conv = QWidget()
@@ -353,83 +335,94 @@ class CourseworkApp(QMainWindow):
         self.fig_conv.tight_layout()
         self.canvas_conv.draw()
 
-    # --- Обработчик вкладки Качество оценки ---
-    def calc_quality(self):
+    # --- Обработчик вкладки Исследование погрешности ---
+    def calc_error_tables(self):
         p = self.get_global_params()
         if not p: return
         try:
-            r_val, z_val = [float(x.strip()) for x in self.q_pt.text().split(',')]
-            B = int(self.q_B.text())
-            eps_str_list = [x.strip() for x in self.q_eps.text().split(',')]
-            eps_list = [float(x) for x in eps_str_list]
-            step_Me = max(int(self.q_step_Me.text()), 1)
+            N_str_list = [x.strip() for x in self.q_N_vals.text().split(',')]
+            N_list = [int(x) for x in N_str_list]
+            N_list.sort()  # Гарантируем сортировку по возрастанию для оптимизации
         except ValueError:
-            QMessageBox.critical(self, "Ошибка", "Неверный формат параметров таблицы.")
+            QMessageBox.critical(self, "Ошибка", "Неверный формат списка N. Вводите целые числа через запятую.")
             return
 
-        max_theoretical_mt = 100
-        for eps in eps_list:
-            max_theoretical_mt = max(max_theoretical_mt, FourierBesselCalculator.calculate_Mt_theoretical(eps, B))
+        max_N = max(N_list)
 
-        calc = FourierBesselCalculator(p['R'], p['L'], p['lam'], p['n_ref'], p['A_amp'], p['c_frac'],
-                                       max_theoretical_mt + 100)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            calc = FourierBesselCalculator(p['R'], p['L'], p['lam'], p['n_ref'], p['A_amp'], p['c_frac'], max_N)
 
-        self.table_q.setColumnCount(len(eps_list))
-        self.table_q.setRowCount(4)
-        self.table_q.setHorizontalHeaderLabels(eps_str_list)
-        self.table_q.setVerticalHeaderLabels(['Mt', 'Me', 'Mt - Me', '|S_Mt - S_Me|'])
-        self.table_q.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            for table in [self.table_q1, self.table_q2]:
+                table.setColumnCount(len(N_list))
+                table.setRowCount(2)
+                table.setHorizontalHeaderLabels([str(n) for n in N_list])
+                table.setVerticalHeaderLabels(['Значение U_N(r, z)', 'Погрешность ε_N'])
+                table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
-        for col, eps in enumerate(eps_list):
-            Mt = FourierBesselCalculator.calculate_Mt_theoretical(eps, B)
+            true_1 = complex(p['A_amp'])
 
-            # Разность полей |S_Mt - S_m| — это модуль суммы членов от m + 1 до Mt.
-            Me = Mt
-            for m in range(Mt - step_Me, 0, -step_Me):
-                S_diff = calc.calculate_u_range(r_val, z_val, m + 1, Mt)
-                diff = np.abs(S_diff)
-
-                print("m: ", m)
-                print("eps: ", eps)
-
-                if diff < eps:
-                    Me = m
-                else:
-                    break
-
-            if Me == Mt:
-                actual_diff = 0.0
+            if 0.5 <= p['c_frac']:
+                true_2 = complex(p['A_amp'])
             else:
-                actual_diff = np.abs(calc.calculate_u_range(r_val, z_val, Me + 1, Mt))
+                true_2 = 0.0 + 0j
 
-            self.table_q.setItem(0, col, QTableWidgetItem(str(Mt)))
-            self.table_q.setItem(1, col, QTableWidgetItem(str(Me)))
-            self.table_q.setItem(2, col, QTableWidgetItem(str(Mt - Me)))
-            self.table_q.setItem(3, col, QTableWidgetItem(f"{actual_diff:.6e}"))
+            current_u1 = 0j
+            current_u2 = 0j
+            prev_n = 0
 
-    def save_csv(self):
-        if self.table_q.rowCount() == 0:
-            QMessageBox.warning(self, "Пусто", "Сначала рассчитайте таблицу.")
+            for col, n in enumerate(N_list):
+                chunk1 = calc.calculate_u_range(0.0, 0.0, prev_n + 1, n)
+                chunk2 = calc.calculate_u_range(0.5 * p['R'], 0.0, prev_n + 1, n)
+
+                current_u1 += chunk1
+                current_u2 += chunk2
+                prev_n = n
+
+                err1 = abs(true_1 - current_u1)
+                err2 = abs(true_2 - current_u2)
+
+                self.table_q1.setItem(0, col, QTableWidgetItem(f"{abs(current_u1):.6f}"))
+                self.table_q1.setItem(1, col, QTableWidgetItem(f"{err1:.6e}"))
+
+                self.table_q2.setItem(0, col, QTableWidgetItem(f"{abs(current_u2):.6f}"))
+                self.table_q2.setItem(1, col, QTableWidgetItem(f"{err2:.6e}"))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка расчетов", str(e))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def save_error_csv(self):
+        if self.table_q1.rowCount() == 0:
+            QMessageBox.warning(self, "Пусто", "Сначала рассчитайте таблицы.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Сохранить CSV", "quality_evaluation.csv", "CSV Files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить CSV", "error_evaluation.csv", "CSV Files (*.csv)")
         if not path: return
 
         try:
             with open(path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f, delimiter=';')
-                headers = ["Параметр"] + [self.table_q.horizontalHeaderItem(i).text() for i in
-                                          range(self.table_q.columnCount())]
-                writer.writerow(headers)
 
-                for row in range(self.table_q.rowCount()):
-                    row_data = [self.table_q.verticalHeaderItem(row).text()]
-                    for col in range(self.table_q.columnCount()):
-                        item = self.table_q.item(row, col)
-                        row_data.append(item.text() if item else "")
-                    writer.writerow(row_data)
+                def write_table_to_csv(table, title):
+                    writer.writerow([title])
+                    headers = ["Параметр"] + [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+                    writer.writerow(headers)
 
-            QMessageBox.information(self, "Успех", f"Данные сохранены в файл:\n{path}")
+                    for row in range(table.rowCount()):
+                        row_data = [table.verticalHeaderItem(row).text()]
+                        for col in range(table.columnCount()):
+                            item = table.item(row, col)
+                            row_data.append(item.text() if item else "")
+                        writer.writerow(row_data)
+
+                    writer.writerow([])
+
+                write_table_to_csv(self.table_q1, "Таблица 1: Точка r = 0, z = 0")
+                write_table_to_csv(self.table_q2, "Таблица 2: Точка r = 0.5R, z = 0")
+
+            QMessageBox.information(self, "Успех", f"Обе таблицы сохранены в файл:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{str(e)}")
 
