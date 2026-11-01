@@ -25,7 +25,7 @@ class WaveguideCalculator:
         k = 2 * np.pi / self.lam
         mu = 1j * hz / (2 * k * self.n_ref)
 
-        # Массивы размера I (n)
+        # Массивы размера I
         a = np.zeros(I, dtype=np.complex128)
         b = np.zeros(I, dtype=np.complex128)
         c = np.zeros(I, dtype=np.complex128)
@@ -46,37 +46,34 @@ class WaveguideCalculator:
         c[I - 1] = 0
         return a, b, c
 
-    # 2. ОТДЕЛЬНАЯ ФУНКЦИЯ: Получение прогоночных коэффициентов
+    # 2. Получение прогоночных коэффициентов
     def get_sweep_coeffs(self, a, b, c, f):
         n = len(b)
-        b_sweep = np.zeros(n, dtype=np.complex128)
-        f_sweep = np.zeros(n, dtype=np.complex128)
+        b_sweep = np.ones(n, dtype=np.complex128)
+        f_sweep = np.ones(n, dtype=np.complex128)
 
-        # Начальное условие для правого края (так как прогонка идет справа налево)
+        # Начальное условие
         # На последнем элементе c_n = 0, поэтому b'_n = b_n, f'_n = f_n
         b_sweep[n - 1] = b[n - 1]
         f_sweep[n - 1] = f[n - 1]
 
-        # Идем от n-2 до 1 (в коде от n-2 до 1, т.к. 0-й индекс считаем отдельно)
-        for i in range(n - 2, 0, -1):
-            # ВАША ФОРМУЛА: b'_{n-1} = (b'_n * b_{n-1} - c_{n-1}) / (a_{n-1} * b'_n)
-            b_sweep[i] = (b_sweep[i + 1] * b[i] - c[i]) / (a[i] * b_sweep[i + 1])
+        for i in range(n - 1, 1, -1):
+            b_sweep[i-1] = (b_sweep[i] * b[i-1] - c[i-1]) / (a[i-1] * b_sweep[i])
 
-            # ВАША ФОРМУЛА: f'_{n-1} = (b'_n * f_{n-1} - c_{n-1} * f'_n) / (a_{n-1} * b'_n)
-            f_sweep[i] = (b_sweep[i + 1] * f[i] - c[i] * f_sweep[i + 1]) / (a[i] * b_sweep[i + 1])
+            f_sweep[i-1] = (b_sweep[i] * f[i-1] - c[i-1] * f_sweep[i]) / (a[i-1] * b_sweep[i])
 
-        # ВАШИ ОТДЕЛЬНЫЕ ФОРМУЛЫ ДЛЯ ПЕРВОГО ЭЛЕМЕНТА (b'_1 и f'_1)
+        # ОТДЕЛЬНЫЕ ФОРМУЛЫ ДЛЯ ПЕРВОГО ЭЛЕМЕНТА (b'_1 и f'_1)
         b_sweep[0] = b[0] - c[0] / b_sweep[1]
         f_sweep[0] = f[0] - c[0] * f_sweep[1] / b_sweep[1]
 
         return b_sweep, f_sweep
 
-    # 3. ОТДЕЛЬНАЯ ФУНКЦИЯ: Обратная прогонка (прямой ход решения)
+    # 3. Обратная прогонка (прямой ход решения)
     def backward_substitution(self, b_sweep, f_sweep):
         n = len(b_sweep)
         x = np.zeros(n, dtype=np.complex128)
 
-        # Согласно матрице на фото (нижнетреугольная):
+
         # b'_1 * x_1 = f'_1  =>  x_1 = f'_1 / b'_1
         x[0] = f_sweep[0] / b_sweep[0]
 
@@ -95,7 +92,7 @@ class WaveguideCalculator:
 
         u = np.zeros((K + 1, I + 1), dtype=np.complex128)
 
-        # ИСПРАВЛЕНИЕ: Начальное условие в виде ступенчатой функции (по варианту)
+
         # psi(r) = 12, при r in [0, 0.1R], иначе 0
         for i in range(I):
             if r[i] <= self.c_frac * self.R:
@@ -135,7 +132,7 @@ class CourseworkApp(QMainWindow):
         param_group = QGroupBox("Глобальные параметры системы")
         self.global_params = QFormLayout()
 
-        # ИСПРАВЛЕНИЕ: Амплитуда по умолчанию теперь 12.0
+
         self.global_inputs = {
             'R (мкм)': QLineEdit('4.0'),
             'L (макс. z, мкм)': QLineEdit('2.0'),
