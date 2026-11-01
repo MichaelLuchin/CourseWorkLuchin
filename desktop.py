@@ -10,7 +10,7 @@ from matplotlib.figure import Figure
 
 
 class WaveguideCalculator:
-    """Класс для численного решения методом прогонки (строго по формулам заказчика)."""
+    """Класс для численного решения методом прогонки"""
 
     def __init__(self, R, L, lam, n_ref, A_amp, c_frac):
         self.R = R
@@ -20,29 +20,30 @@ class WaveguideCalculator:
         self.A_amp = A_amp
         self.c_frac = c_frac
 
-    # 1. ОТДЕЛЬНАЯ ФУНКЦИЯ: Получение коэффициентов a, b, c
+    # 1. Получение коэффициентов a, b, c
     def get_matrix_coeffs(self, I, hr, hz):
         k = 2 * np.pi / self.lam
-        mu = 1j * hz / (2 * k * self.n_ref)
+        gamma = 1j * hz / (2 * k * self.n_ref * hr ** 2)
 
         # Массивы размера I
         a = np.zeros(I, dtype=np.complex128)
         b = np.zeros(I, dtype=np.complex128)
         c = np.zeros(I, dtype=np.complex128)
 
-        # i = 0 (соответствует a_1 = 0)
+        # i = 0 (первая строка матрицы, соответствует a_1 = 0)
         a[0] = 0
-        b[0] = 1 - 4 * mu / hr ** 2
-        c[0] = 4 * mu / hr ** 2
+        b[0] = 1 - 4 * gamma
+        c[0] = 4 * gamma
 
         # i = 1...I-1
         for i in range(1, I):
-            r_i = i * hr
-            a[i] = mu / hr ** 2
-            b[i] = 1 - mu * (2 / hr ** 2 + 1 / (r_i * hr))
-            c[i] = mu * (1 / hr ** 2 + 1 / (r_i * hr))
+            a[i] = gamma
+            # b[i] = 1 - 2y - 1/i
+            b[i] = 1 - 2 * gamma - gamma / i
+            # c[i] = y * (1 + 1/i)
+            c[i] = gamma * (1 + 1 / i)
 
-        # Граничное условие (соответствует c_n = 0)
+        # Граничное условие
         c[I - 1] = 0
         return a, b, c
 
@@ -58,9 +59,11 @@ class WaveguideCalculator:
         f_sweep[n - 1] = f[n - 1]
 
         for i in range(n - 1, 1, -1):
-            b_sweep[i-1] = (b_sweep[i] * b[i-1] - c[i-1]) / (a[i-1] * b_sweep[i])
+            # b'_{n-1} = (b'_n * b_{n-1} - c_{n-1}) / (a_{n-1} * b'_n)
+            b_sweep[i - 1] = (b_sweep[i] * b[i - 1] - c[i - 1]) / (a[i - 1] * b_sweep[i])
 
-            f_sweep[i-1] = (b_sweep[i] * f[i-1] - c[i-1] * f_sweep[i]) / (a[i-1] * b_sweep[i])
+            # f'_{n-1} = (b'_n * f_{n-1} - c_{n-1} * f'_n) / (a_{n-1} * b'_n)
+            f_sweep[i - 1] = (b_sweep[i] * f[i - 1] - c[i - 1] * f_sweep[i]) / (a[i - 1] * b_sweep[i])
 
         # ОТДЕЛЬНЫЕ ФОРМУЛЫ ДЛЯ ПЕРВОГО ЭЛЕМЕНТА (b'_1 и f'_1)
         b_sweep[0] = b[0] - c[0] / b_sweep[1]
@@ -68,11 +71,10 @@ class WaveguideCalculator:
 
         return b_sweep, f_sweep
 
-    # 3. Обратная прогонка (прямой ход решения)
+    # 3. Обратная прогонка
     def backward_substitution(self, b_sweep, f_sweep):
         n = len(b_sweep)
         x = np.zeros(n, dtype=np.complex128)
-
 
         # b'_1 * x_1 = f'_1  =>  x_1 = f'_1 / b'_1
         x[0] = f_sweep[0] / b_sweep[0]
@@ -92,14 +94,14 @@ class WaveguideCalculator:
 
         u = np.zeros((K + 1, I + 1), dtype=np.complex128)
 
-
-        # psi(r) = 12, при r in [0, 0.1R], иначе 0
+        # Начальное условие psi(r) = 12, при r in [0, 0.1R], иначе 0
         for i in range(I):
             if r[i] <= self.c_frac * self.R:
                 u[0, i] = self.A_amp
             else:
                 u[0, i] = 0.0
 
+        # Получаем коэффициенты
         a, b, c = self.get_matrix_coeffs(I, hr, hz)
 
         for k in range(1, K + 1):
