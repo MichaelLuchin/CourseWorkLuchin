@@ -50,26 +50,17 @@ class WaveguideCalculator:
     # 2. Получение прогоночных коэффициентов
     def get_sweep_coeffs(self, a, b, c, f):
         n = len(b)
-        b_sweep = np.ones(n, dtype=np.complex128)
-        f_sweep = np.ones(n, dtype=np.complex128)
+        b_sweep = np.ones(n + 1, dtype=np.complex128)  # b_sweep[n] = 1 — фиктивный узел
+        f_sweep = np.zeros(n + 1, dtype=np.complex128)  # f_sweep[n] = 0 (умножается на c[n-1] = 0)
 
-        # Начальное условие
-        # На последнем элементе c_n = 0, поэтому b'_n = b_n, f'_n = f_n
-        b_sweep[n - 1] = b[n - 1]
-        f_sweep[n - 1] = f[n - 1]
-
-        for i in range(n - 1, 1, -1):
-            # b'_{n-1} = (b'_n * b_{n-1} - c_{n-1}) / (a_{n-1} * b'_n)
+        for i in range(n, 1, -1):
             b_sweep[i - 1] = (b_sweep[i] * b[i - 1] - c[i - 1]) / (a[i - 1] * b_sweep[i])
-
-            # f'_{n-1} = (b'_n * f_{n-1} - c_{n-1} * f'_n) / (a_{n-1} * b'_n)
             f_sweep[i - 1] = (b_sweep[i] * f[i - 1] - c[i - 1] * f_sweep[i]) / (a[i - 1] * b_sweep[i])
 
-        # ОТДЕЛЬНЫЕ ФОРМУЛЫ ДЛЯ ПЕРВОГО ЭЛЕМЕНТА (b'_1 и f'_1)
         b_sweep[0] = b[0] - c[0] / b_sweep[1]
         f_sweep[0] = f[0] - c[0] * f_sweep[1] / b_sweep[1]
 
-        return b_sweep, f_sweep
+        return b_sweep[:n], f_sweep[:n]
 
     # 3. Обратная прогонка
     def backward_substitution(self, b_sweep, f_sweep):
